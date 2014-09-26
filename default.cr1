@@ -1,0 +1,299 @@
+''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+'  CRBASIC program to record an ATI sonic anemometer                           '
+'  Laboratory for Atmospheric Research                                         '
+'  Washington State University                                                 '
+'                                                                              '
+'  Last modified 2013-6-10 by Patrick O'Keeffe <pokeeffe@wsu.edu>              '
+'  Covered by the MIT License (at end of file)                                 '
+''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+
+'==========  CONFIGURABLE OPTIONS
+'permit options to be changed via menu: Configure > Settings > Constant Table
+ConstTable
+
+' These constants control how much data is stored on the compact flash
+' card and whether it overwrite previous data when the tables fill up.
+Const DAYS_OF_DATA_STORAGE = 14     'integer # of days or -1 to autoallocate
+Const STOP_WHEN_FULL = 1            '0=no, 1=yes
+
+' These values are incorporated in instant WS/WD calculations and stats tables
+Const AZIMUTH = 0          'w.r.t True or Mag North
+Const DECLINATION = 0      'follows east=(+) west=(-) convention: TN = MN + declin
+                           'http://www.ngdc.noaa.gov/geomag-web/#declination
+
+EndConstTable
+
+'==========  DEVICES SETUP & WIRING
+
+'''''' ATI sonic configuration '''''''''''''''''''''''''''''''''''''''''''''''''
+' ASCII mode: terse        Data quality algorithm: ON
+' Baud rate: 9600          Shadow correction: ON
+' Parity: even             Remove RH from temp calc: ON + RH=0
+' data bits: 7             Sampling 10Hz (20 samples, 5ms apart per output)
+' stop bits: 1             Output: U,V,W,T
+'                          Data lag: 1/10th second
+
+'''''' PS100 charger wiring ''''''''''''''''''''''''''''''''''''''''''''''''''''
+'POWER IN
+'one      18vDC dell laptop power supply (+)
+'other    18vDC dell laptop power supply (-)
+'
+'POWER OUT
+'12V      CR3000 12v
+'G        CR3000 ground
+'
+'BATTERY
+'(+)      internal battery (12V 7AH) positive terminal
+'(-)      internal battery (12V 7AH) negative terminal
+'(+)      deep cycle battery, 12VDC, positive terminal
+'(-)      deep cycle battery, 12VDC, negative terminal
+
+'''''' CR3000 Wiring '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+'POWER IN (10-16vDC)
+'12V      PS100 charger (+)
+'G        PS100 charger (-)
+'
+'POWER OUT
+'12V      ATI sonics power (+)
+'G        ATI sonics power (-)
+'
+'SWITCHED POWER OUT
+'12V      enclosure fan (+)
+'G        enclosure fan (-)
+'
+'COM PORTS
+'C1       sonic transmit, Tx
+'C2         "   receive, Rx
+'G          "   chassis ground, G
+
+
+'==========  PROGRAM OPERATION
+
+Const SCAN_RATE = 100      'length of primary scan interval, milliseconds
+Const STAT_INTV = 30       'output interval of statistics, minutes
+
+#If (DAYS_OF_DATA_STORAGE < 0)
+  Const TS_TSIZE = -1  'autoallocate
+  Const STAT_TSIZE = -1
+#Else
+  Const TS_TSIZE = DAYS_OF_DATA_STORAGE * 86400 * (1000/SCAN_RATE)
+  ' #rec = (days)(secs/day)( (msec/sec) * (msec/rec)^-1 )
+  Const STAT_TSIZE = DAYS_OF_DATA_STORAGE * 1440 / STAT_INTV
+  ' #rec = (days)(min/day) * (min/rec)^-1
+#EndIf
+
+Dim record_data As Boolean 'flag for storing to data tables
+Dim n = {1} 'for totaling
+Units n = records
+Dim j       'for parsing string data
+Const DperR = 180/3.14159
+Const Vaz = {90}   'sonic-specific coordinate system compensation
+
+' DATALOGGER
+Public panel_temp
+Public inputpwr
+Units panel_temp = C
+Units inputpwr = volts
+
+Public fan_threshold = {30}   'default value, Celcius
+Units fan_threshold = C
+
+' COM 1 sonic input
+Public sonic(7) As Float
+Alias sonic(1) = Ux
+Alias sonic(2) = Uy
+Alias sonic(3) = Uz
+Alias sonic(4) = Ts
+Alias sonic(5) = diag
+Alias sonic(6) = instWS
+Alias sonic(7) = instWD
+Units sonic = m/s
+Units Ts = C
+Units instWD = degrees
+Dim son_in_str As String * 20
+Dim son_in_parts(4) As String * 5
+Dim bytes_back
+
+' intermediate values
+Dim results(5)
+Alias results(1) = WS_sclr_Avg
+Alias results(2) = WS_rslt_Avg
+Alias results(3) = WD_rslt_Avg
+Alias results(4) = WD_rslt_Std
+Alias results(5) = WS_sclr_Std
+Units WS_sclr_Avg = m/s
+Units WS_rslt_Avg = m/s
+Units WD_rslt_Avg = degEofN
+Units WD_rslt_Std = deg
+Units WS_sclr_Std = m/s
+
+'''''' Data Tables ''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+DataTable(tsdata,record_data,-1)
+  DataInterval(0,0,mSec,100)
+  CardOut(STOP_WHEN_FULL,TS_TSIZE)
+  Sample(4,Ux,IEEE4)  '+Uy,Uz,Ts
+  Sample(1,diag,UINT2)
+EndTable
+
+DataTable(work,TRUE,1)
+  DataInterval(0,STAT_INTV,Min,2)
+  'do not store to card
+  WindVector(1,-1*Uy,Ux,IEEE4,diag,0,1,2)
+  StdDev(1,instWS,IEEE4,diag)
+EndTable
+
+DataTable(stats,record_data,-1)
+  DataInterval(0,STAT_INTV,Min,10)
+  CardOut(STOP_WHEN_FULL,STAT_TSIZE)
+  Average(1,Uz,FP2,diag)
+  StdDev(1,Uz,FP2,diag)
+  Average(1,Ts,FP2,diag)
+  StdDev(1,Ts,FP2,diag)
+  Sample(1,WD_rslt_Avg,FP2)
+  Sample(1,WD_rslt_Std,FP2)
+  Sample(1,WS_sclr_Avg,FP2)
+  Sample(1,WS_sclr_Std,FP2)
+  Sample(1,WS_rslt_Avg,FP2)
+  Totalize(1,n,UINT2,NOT diag)
+    FieldNames("baddata_Tot")
+  Totalize(1,n,UINT2,diag)
+    FieldNames("samples_Tot")
+  Average(1,inputpwr,FP2,inputpwr=NAN)
+  Average(1,panel_temp,FP2,panel_temp=NAN)
+EndTable
+
+DataTable(info,TRUE,1000)
+  CardOut(STOP_WHEN_FULL,1000)
+  Sample(1,AZIMUTH,FP2)
+    FieldNames("sonic_azimuth")
+    Units sonic_azimuth = degEofN
+  Sample(1,DECLINATION,FP2)
+    FieldNames("site_declination")
+    Units site_declination = degEofN
+  Sample(1,Status.CompileResults,String)
+    FieldNames("CompileResults")
+  Sample(1,Status.CardStatus,String)
+    FieldNames("CardStatus")
+  Sample(1,Status.RunSignature,UINT2)
+    FieldNames("RunSig")
+  Sample(1,Status.ProgSignature,UINT2)
+    FieldNames("ProgSig")
+EndTable
+
+
+'''''' Datalogger Menu ''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+Const Yes = True
+Const No = False
+DisplayMenu("ATI Recorder",-1)
+  MenuItem("Record data?", record_data)
+    MenuPick(Yes, No)
+  MenuItem("Fan SP, *C", fan_threshold)
+  SubMenu("10hz data")
+    DisplayValue("WD, deg", Public.instWD)
+    DisplayValue("WS, m/s", Public.instWS)
+    DisplayValue("Ts, *C", Public.Ts)
+    DisplayValue("Ux, m/s", Public.Ux)
+    DisplayValue("Uy, m/s", Public.Uy)
+    DisplayValue("Uz, m/s", Public.Uz)
+    DisplayValue("Power input, V", Public.inputpwr)
+    DisplayValue("Panel temp, *C", Public.panel_temp)
+  EndSubMenu
+EndMenu
+
+
+'''''' PROGRAM '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+BeginProg
+  'open serial ports     Baud=9600; 10=even/7bits/1stop; 0ms Tx delay; 40byte buffer
+  SerialOpen(Com1,9600,10,0,40)
+
+  record_data = True 'default to recording data upon restoring power after loss
+
+  CallTable(info)
+  Scan(SCAN_RATE,mSec,10,0)
+
+    PanelTemp(panel_temp,250)      'measure datalogger temperature
+    If ( panel_temp >= fan_threshold ) 'if logger temp exceeds 30 deg C / 85 deg F
+      SW12(True)                     'turn on fan
+    ElseIf ( panel_temp < (fan_threshold-2) ) '2 degree hysterisis
+      SW12(False)
+    EndIf
+    Battery(inputpwr)                  'measure input voltage
+
+    'Get serial data from ATI sonic
+    'SerialInRecord (COMPort,Dest,SyncChar,NumBytes,EndWord,NumberBytesReturned,Option)
+    '          ComPort:  Datalogger communications port
+    '            Dest:  Destination variable
+    '          SyncChar:  Synchronization character at the beginning of the record
+    '          NumBytes:  Fixed number of bytes in the record, if the number of bytes varies, use the SyncChar and EndWord to define the record
+    '          EndWord:  Record termination word
+    '      NumberbytesReturned:  Variable to hold the number of bytes in the record
+    '          Options:  00 most recent record, do not store NAN if no record
+    '                        01 most recent record, store NAN if no record
+    '                        10 oldest record, do not store NAN if no record
+    '                        11 oldest record, store NAN if no record
+    ' SONIC COM PORT 1
+    SerialInRecord (Com1,son_in_str,0,20,&H0D0A,bytes_back,00)  'get serial data
+    MoveBytes (son_in_parts(1),0,son_in_str,0,5)    'parse individual values from data string
+    MoveBytes (son_in_parts(2),0,son_in_str,5,5)
+    MoveBytes (son_in_parts(3),0,son_in_str,10,5)
+    MoveBytes (son_in_parts(4),0,son_in_str,15,5)
+    diag = 0                      'reset diagnostic word
+    For j = 1 To 4                  'for each data byte
+      sonic(j) = son_in_parts(j)      'Convert from a string to float
+      If (sonic(j) = -9999)           'if reported -99.99 -> axis blockage / transducer failure
+        sonic(j) = NAN
+        diag = diag + 1*10^(j-1)        'place a 1 in ones/tens/hundreds/thousands place
+      ElseIf (sonic(j) = 9999)        'if reported +99.99 -> data quality algorithm on; ATI threw out data
+        sonic(j) = NAN
+        diag = diag + 2*10^(j-1)        'place a 2 in ones/... place
+      ElseIf (sonic(j) = NAN)         'if interpreted as NAN, denote so in flag
+        diag = diag + 3*10^(j-1)
+      Else                            'otherwise
+        sonic(j) = sonic(j)/100           'Scale the ATI data.
+      EndIf
+    Next j
+    If (diag) Then      
+      instWS = NAN
+      instWD = NAN
+    Else
+      instWS = SQR(Ux^2+Uy^2)
+      instWD = (ATN2(-1*Ux,-1*Uy)*DperR + Vaz + AZIMUTH + DECLINATION + 360) MOD 360
+    EndIf
+    CallTable(tsdata)
+
+    'adjust statistics to include azimuth+declination
+    CallTable(work)
+    If (work.Output(1,1)) Then
+      GetRecord(results(1),work,1)
+      If (WS_sclr_Avg=NAN AND WS_rslt_Avg=NAN) Then
+        WD_rslt_Avg = NAN
+        WD_rslt_Std = NAN
+      Else
+        WD_rslt_Avg = (WD_rslt_Avg + AZIMUTH + DECLINATION) MOD 360
+      EndIf
+    EndIf
+
+    CallTable(stats)
+  NextScan
+EndProg
+
+
+'This work is covered by the MIT License, an Open Source Initiative Approved License
+'
+'Copyright (c) 2012 Laboratory For Atmospheric Research, Washington State University
+'
+'Permission Is hereby granted, free of charge, To any person obtaining a copy of this
+'software AND associated documentation files (the "Software"), To deal in the Software
+'without restriction, including without limitation the rights To use, copy, modify, merge,
+'publish, distribute, sublicense, AND/OR sell copies of the Software, AND To permit
+'persons To whom the Software Is furnished To Do so, subject To the following conditions:
+'
+'The above copyright notice AND this permission notice shall be included in all copies OR
+'substantial portions of the Software.
+'
+'THE SOFTWARE Is PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+'INCLUDING BUT NOT LIMITED To THE WARRANTIES OF MERCHANTABILITY, FITNESS For A PARTICULAR
+'PURPOSE AND NONINFRINGEMENT. IN No EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE
+'For ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
+'OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+'DEALINGS IN THE SOFTWARE.
