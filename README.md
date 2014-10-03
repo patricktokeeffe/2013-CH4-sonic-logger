@@ -12,7 +12,8 @@ measure methane in-and-around Indianapolis during June 2013.
 
 > Online: <https://bitbucket.org/wsular/2013-ch4-sonic-daq>
 
-The document `instructions.odt` is an OpenDocument Text file describing:
+The document `instructions.odt` ([PDF version](https://bitbucket.org/wsular/2013-ch4-sonic-daq/downloads/instructions.pdf))
+is an OpenDocument Text file describing:
 
 * List of system components
 * Configuration of sonic anemometer
