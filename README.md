@@ -10,10 +10,7 @@ Applied Technology Inc (ATI) sonic anemometer (SATI-* series) using a
 Scientific Inc (CSI). The program was prepared for a field campaign to
 measure methane in-and-around Indianapolis during June 2013.
 
-> Online: <https://bitbucket.org/wsular/2013-ch4-sonic-daq>
-
-The document `instructions.odt` ([PDF version](https://bitbucket.org/wsular/2013-ch4-sonic-daq/downloads/instructions.pdf))
-is an OpenDocument Text file describing:
+The document `instructions.odt` is an OpenDocument Text file describing:
 
 * List of system components
 * Configuration of sonic anemometer
@@ -31,9 +28,3 @@ In addition to this document, refer to comments in the program source code.
 ### License
 
 This work is licensed under [The MIT License](http://opensource.org/licenses/mit-license.html).
-
-### Disclaimer
-
-This work is not affiliated with or endorsed by Campbell Scientific Inc., the 
-maker of the datalogger or Applied Technology Inc., the maker of the sonic 
-anemometer.
